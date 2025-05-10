@@ -1,0 +1,24 @@
+{
+  "name": "legal-api",
+  "version": "1.0.0",
+  "description": "This guide provides detailed instructions for implementing the Google Scholar-like legal research API for your In My Square Legal App. The implementation follows a hybrid approach using your existing Supabase database while creating a proprietary API service.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4",
+    "async-sema": "^3.1.1",
+    "axios": "^1.9.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "git": "^0.1.5",
+    "lru-cache": "^11.1.0"
+  }
+}

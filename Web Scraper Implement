@@ -1,0 +1,490 @@
+// Legal Web Scraper Implementation
+// This module handles the web scraping component of the Legal Research API
+// Note: Always ensure compliance with robots.txt and terms of service for each site
+
+const axios = require('axios');
+const cheerio = require('cheerio');
+const { RateLimit } = require('async-sema');
+const { parseRobotsTxt } = require('robots-parser');
+const { createClient } = require('@supabase/supabase-js');
+
+// Supabase configuration
+const supabaseUrl = process.env.SUPABASE_URL || 'https://cesifthkmduihsjiiwxj.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Rate limiting configuration
+const scrapingRateLimits = {
+  'lawreview.stanford.edu': RateLimit(1, { timeUnit: 60000, uniformDistribution: true }), // 1 request per minute
+  'harvardlawreview.org': RateLimit(1, { timeUnit: 60000, uniformDistribution: true }),
+  'yalelawjournal.org': RateLimit(1, { timeUnit: 120000, uniformDistribution: true }), // 1 request per 2 minutes
+  'supremecourt.gov': RateLimit(5, { timeUnit: 60000, uniformDistribution: true }), // 5 requests per minute
+  'scholar.google.com': RateLimit(1, { timeUnit: 300000, uniformDistribution: true }) // Very conservative, 1 per 5 minutes
+};
+
+// Map of site robots.txt cache
+const robotsTxtCache = {};
+
+// Load robots.txt for a domain
+async function getRobotsTxt(domain) {
+  if (robotsTxtCache[domain]) {
+    return robotsTxtCache[domain];
+  }
+  
+  try {
+    const response = await axios.get(`https://${domain}/robots.txt`, {
+      headers: {
+        'User-Agent': 'Legal Research Bot (contact@inmysquare.app)'
+      }
+    });
+    
+    const parser = parseRobotsTxt(response.data, {
+      userAgent: 'Legal Research Bot',
+      allowOnNeutral: false
+    });
+    
+    robotsTxtCache[domain] = parser;
+    return parser;
+  } catch (error) {
+    console.error(`Error fetching robots.txt for ${domain}:`, error);
+    // Default to conservative rules if robots.txt cannot be fetched
+    robotsTxtCache[domain] = {
+      isAllowed: (path) => true, // Default to permissive but use rate limiting
+      getCrawlDelay: () => 60 // Default to 60 seconds between requests
+    };
+    return robotsTxtCache[domain];
+  }
+}
+
+// Check if scraping is allowed for a URL
+async function isScrapingAllowed(url) {
+  try {
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname;
+    const path = urlObj.pathname;
+    
+    const robotsTxt = await getRobotsTxt(domain);
+    return robotsTxt.isAllowed(path);
+  } catch (error) {
+    console.error('Error checking scraping permission:', error);
+    return false; // Default to not allowed if there's an error
+  }
+}
+
+// Get site-specific rate limiter
+function getRateLimiter(domain) {
+  if (scrapingRateLimits[domain]) {
+    return scrapingRateLimits[domain];
+  }
+  
+  // Default conservative rate limiter for unknown sites
+  return RateLimit(1, { timeUnit: 60000, uniformDistribution: true }); // 1 request per minute
+}
+
+// Format Stanford Law Review search results
+function formatStanfordLawResults($) {
+  const results = [];
+  
+  $('.views-row').each((i, el) => {
+    const title = $(el).find('h2 a').text().trim();
+    const url = 'https://lawreview.stanford.edu' + $(el).find('h2 a').attr('href');
+    const authors = $(el).find('.field--name-field-written-by').text().trim();
+    const abstract = $(el).find('.field--name-field-excerpt').text().trim();
+    const date = $(el).find('.field--name-field-volume').text().trim();
+    
+    if (title) {
+      results.push({
+        id: `stanford-${url.split('/').pop()}`,
+        title,
+        content: abstract,
+        authors,
+        date,
+        url,
+        source: 'Stanford Law Review'
+      });
+    }
+  });
+  
+  return results;
+}
+
+// Format Harvard Law Review search results
+function formatHarvardLawResults($) {
+  const results = [];
+  
+  $('.post').each((i, el) => {
+    const title = $(el).find('.entry-title').text().trim();
+    const url = $(el).find('.entry-title a').attr('href');
+    const abstract = $(el).find('.entry-content p').first().text().trim();
+    const meta = $(el).find('.entry-meta').text().trim();
+    
+    // Extract date with regex
+    const dateMatch = meta.match(/(\w+ \d+, \d{4})/);
+    const date = dateMatch ? dateMatch[0] : '';
+    
+    if (title) {
+      results.push({
+        id: `harvard-${url.split('/').pop()}`,
+        title,
+        content: abstract,
+        date,
+        url,
+        source: 'Harvard Law Review'
+      });
+    }
+  });
+  
+  return results;
+}
+
+// Format Yale Law Journal search results
+function formatYaleLawResults($) {
+  const results = [];
+  
+  $('.article-item').each((i, el) => {
+    const title = $(el).find('.article-title').text().trim();
+    const url = 'https://www.yalelawjournal.org' + $(el).find('.article-title a').attr('href');
+    const authors = $(el).find('.article-author').text().trim();
+    const abstract = $(el).find('.article-abstract').text().trim();
+    const volume = $(el).find('.article-volume').text().trim();
+    
+    if (title) {
+      results.push({
+        id: `yale-${url.split('/').pop()}`,
+        title,
+        content: abstract,
+        authors,
+        date: volume,
+        url,
+        source: 'Yale Law Journal'
+      });
+    }
+  });
+  
+  return results;
+}
+
+// Format Supreme Court search results
+function formatSupremeCourtResults($) {
+  const results = [];
+  
+  $('.opinion-item').each((i, el) => {
+    const title = $(el).find('.opinion-title').text().trim();
+    const url = 'https://www.supremecourt.gov' + $(el).find('a').attr('href');
+    const date = $(el).find('.opinion-date').text().trim();
+    const description = $(el).find('.opinion-desc').text().trim();
+    
+    if (title) {
+      results.push({
+        id: `scotus-${url.split('/').pop()}`,
+        title,
+        content: description,
+        court: 'Supreme Court of the United States',
+        date,
+        url,
+        source: 'Supreme Court of the United States'
+      });
+    }
+  });
+  
+  return results;
+}
+
+// Scrape Stanford Law Review
+async function scrapeStanfordLawReview(query) {
+  const domain = 'lawreview.stanford.edu';
+  const url = `https://${domain}/search?search_api_fulltext=${encodeURIComponent(query)}`;
+  
+  if (!(await isScrapingAllowed(url))) {
+    console.log(`Scraping not allowed for ${url}`);
+    return [];
+  }
+  
+  const rateLimiter = getRateLimiter(domain);
+  await rateLimiter();
+  
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Legal Research Bot (contact@inmysquare.app)'
+      }
+    });
+    
+    const $ = cheerio.load(response.data);
+    return formatStanfordLawResults($);
+  } catch (error) {
+    console.error(`Error scraping ${domain}:`, error);
+    return [];
+  }
+}
+
+// Scrape Harvard Law Review
+async function scrapeHarvardLawReview(query) {
+  const domain = 'harvardlawreview.org';
+  const url = `https://${domain}/?s=${encodeURIComponent(query)}`;
+  
+  if (!(await isScrapingAllowed(url))) {
+    console.log(`Scraping not allowed for ${url}`);
+    return [];
+  }
+  
+  const rateLimiter = getRateLimiter(domain);
+  await rateLimiter();
+  
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Legal Research Bot (contact@inmysquare.app)'
+      }
+    });
+    
+    const $ = cheerio.load(response.data);
+    return formatHarvardLawResults($);
+  } catch (error) {
+    console.error(`Error scraping ${domain}:`, error);
+    return [];
+  }
+}
+
+// Scrape Yale Law Journal
+async function scrapeYaleLawJournal(query) {
+  const domain = 'yalelawjournal.org';
+  const url = `https://www.${domain}/search?q=${encodeURIComponent(query)}`;
+  
+  if (!(await isScrapingAllowed(url))) {
+    console.log(`Scraping not allowed for ${url}`);
+    return [];
+  }
+  
+  const rateLimiter = getRateLimiter(domain);
+  await rateLimiter();
+  
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Legal Research Bot (contact@inmysquare.app)'
+      }
+    });
+    
+    const $ = cheerio.load(response.data);
+    return formatYaleLawResults($);
+  } catch (error) {
+    console.error(`Error scraping ${domain}:`, error);
+    return [];
+  }
+}
+
+// Scrape Supreme Court website
+async function scrapeSupremeCourt(query) {
+  const domain = 'supremecourt.gov';
+  const url = `https://www.${domain}/search.aspx?Search=${encodeURIComponent(query)}&type=Site`;
+  
+  if (!(await isScrapingAllowed(url))) {
+    console.log(`Scraping not allowed for ${url}`);
+    return [];
+  }
+  
+  const rateLimiter = getRateLimiter(domain);
+  await rateLimiter();
+  
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Legal Research Bot (contact@inmysquare.app)'
+      }
+    });
+    
+    const $ = cheerio.load(response.data);
+    return formatSupremeCourtResults($);
+  } catch (error) {
+    console.error(`Error scraping ${domain}:`, error);
+    return [];
+  }
+}
+
+// Get case details from a specific website
+async function scrapeCaseDetails(source, id, url) {
+  try {
+    const domain = new URL(url).hostname;
+    
+    if (!(await isScrapingAllowed(url))) {
+      console.log(`Scraping not allowed for ${url}`);
+      return null;
+    }
+    
+    const rateLimiter = getRateLimiter(domain);
+    await rateLimiter();
+    
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Legal Research Bot (contact@inmysquare.app)'
+      }
+    });
+    
+    const $ = cheerio.load(response.data);
+    
+    if (source === 'Stanford Law Review') {
+      const title = $('.page-title').text().trim();
+      const authors = $('.field--name-field-written-by').text().trim();
+      const content = $('.field--name-field-body').html();
+      const date = $('.field--name-field-volume').text().trim();
+      
+      return {
+        id,
+        title,
+        authors,
+        content,
+        date,
+        url,
+        source
+      };
+    } else if (source === 'Harvard Law Review') {
+      const title = $('.entry-title').text().trim();
+      const content = $('.entry-content').html();
+      const meta = $('.entry-meta').text().trim();
+      
+      // Extract date with regex
+      const dateMatch = meta.match(/(\w+ \d+, \d{4})/);
+      const date = dateMatch ? dateMatch[0] : '';
+      
+      return {
+        id,
+        title,
+        content,
+        date,
+        url,
+        source
+      };
+    } else if (source === 'Yale Law Journal') {
+      const title = $('.article-title').text().trim();
+      const authors = $('.article-author').text().trim();
+      const content = $('.article-body').html();
+      const volume = $('.article-volume').text().trim();
+      
+      return {
+        id,
+        title,
+        authors,
+        content,
+        date: volume,
+        url,
+        source
+      };
+    } else if (source === 'Supreme Court of the United States') {
+      const title = $('.opinion-title').text().trim();
+      const date = $('.opinion-date').text().trim();
+      const content = $('.opinion-content').html();
+      
+      return {
+        id,
+        title,
+        content,
+        court: 'Supreme Court of the United States',
+        date,
+        url,
+        source
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`Error scraping details for ${url}:`, error);
+    return null;
+  }
+}
+
+// Main function to scrape multiple sources
+async function scrapeAllowedSources(query, filter) {
+  try {
+    // Run all scrapers in parallel and combine results
+    const [stanfordResults, harvardResults, yaleResults, scotusResults] = await Promise.all([
+      scrapeStanfordLawReview(query),
+      scrapeHarvardLawReview(query),
+      scrapeYaleLawJournal(query),
+      scrapeSupremeCourt(query)
+    ]);
+    
+    const allResults = [
+      ...stanfordResults,
+      ...harvardResults,
+      ...yaleResults,
+      ...scotusResults
+    ];
+    
+    // Store results in Supabase for future use
+    if (allResults.length > 0) {
+      const legalArticles = allResults.filter(result => !result.court);
+      const legalCases = allResults.filter(result => result.court);
+      
+      if (legalArticles.length > 0) {
+        const { error: articlesError } = await supabase.from('legal_articles').upsert(
+          legalArticles.map(article => ({
+            id: article.id,
+            title: article.title,
+            abstract: article.content,
+            authors: article.authors,
+            publication_date: article.date,
+            url: article.url,
+            source: article.source
+          }))
+        );
+        
+        if (articlesError) {
+          console.error('Error storing scraped articles:', articlesError);
+        }
+      }
+      
+      if (legalCases.length > 0) {
+        const { error: casesError } = await supabase.from('legal_cases').upsert(
+          legalCases.map(legalCase => ({
+            id: legalCase.id,
+            title: legalCase.title,
+            content: legalCase.content,
+            court: legalCase.court,
+            decision_date: legalCase.date,
+            url: legalCase.url,
+            source: legalCase.source
+          }))
+        );
+        
+        if (casesError) {
+          console.error('Error storing scraped cases:', casesError);
+        }
+      }
+    }
+    
+    // Apply any filters if needed
+    let filteredResults = allResults;
+    if (filter) {
+      const filters = filter.split(',');
+      
+      filters.forEach(f => {
+        const [key, value] = f.split(':');
+        
+        if (key === 'source') {
+          filteredResults = filteredResults.filter(result => 
+            result.source.toLowerCase().includes(value.toLowerCase())
+          );
+        } else if (key === 'court') {
+          filteredResults = filteredResults.filter(result => 
+            result.court && result.court.toLowerCase().includes(value.toLowerCase())
+          );
+        } else if (key === 'year') {
+          filteredResults = filteredResults.filter(result => 
+            result.date && result.date.includes(value)
+          );
+        }
+      });
+    }
+    
+    return filteredResults;
+  } catch (error) {
+    console.error('Error in scrapeAllowedSources:', error);
+    return [];
+  }
+}
+
+module.exports = {
+  scrapeAllowedSources,
+  scrapeCaseDetails
+};

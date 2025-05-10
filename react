@@ -1,0 +1,293 @@
+// Integration example for In My Square Legal App
+// This demonstrates how to integrate the Legal Research API into your React application
+
+import React, { useState, useEffect } from 'react';
+import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import { debounce } from 'lodash';
+
+// Legal Search Component for In My Square Legal App
+export const LegalResearch = () => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [citationNetwork, setCitationNetwork] = useState(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const supabase = useSupabaseClient();
+  
+  // API endpoint - would be your deployed API
+  const API_URL = process.env.REACT_APP_LEGAL_API_URL || 'https://your-api-domain.com/api';
+
+  // Debounced search function
+  const debouncedSearch = debounce(async (searchQuery) => {
+    if (!searchQuery || searchQuery.trim() === '') {
+      setResults([]);
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const response = await fetch(`${API_URL}/search?query=${encodeURIComponent(searchQuery)}&page=${page}&limit=10`);
+      const data = await response.json();
+      
+      setResults(data.results);
+      setTotalPages(data.pagination.pages);
+    } catch (error) {
+      console.error('Search error:', error);
+      // Fallback to Supabase direct query if API is down
+      const { data, error: supabaseError } = await supabase
+        .from('legal_cases')
+        .select('*')
+        .or(`title.ilike.%${searchQuery}%, content.ilike.%${searchQuery}%`)
+        .range((page - 1) * 10, page * 10 - 1);
+        
+      if (!supabaseError) {
+        setResults(data);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, 500);
+
+  // Handle search input changes
+  const handleSearchChange = (e) => {
+    const value = e.target.value;
+    setQuery(value);
+    debouncedSearch(value);
+  };
+
+  // Handle pagination
+  const handlePageChange = (newPage) => {
+    setPage(newPage);
+  };
+
+  // Load case details
+  const loadCaseDetails = async (caseId) => {
+    setLoading(true);
+    
+    try {
+      const response = await fetch(`${API_URL}/case/${caseId}`);
+      const data = await response.json();
+      
+      setSelectedCase(data);
+      
+      // Also load citation network
+      const citationsResponse = await fetch(`${API_URL}/citations/${caseId}`);
+      const citationsData = await citationsResponse.json();
+      
+      setCitationNetwork(citationsData);
+    } catch (error) {
+      console.error('Case detail loading error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load next page when page changes
+  useEffect(() => {
+    if (query) {
+      debouncedSearch(query);
+    }
+  }, [page]);
+
+  // Clear selected case when query changes
+  useEffect(() => {
+    setSelectedCase(null);
+    setCitationNetwork(null);
+  }, [query]);
+
+  return (
+    <div className="legal-research-container">
+      <div className="search-section">
+        <h2>Legal Research</h2>
+        <div className="search-input">
+          <input
+            type="text"
+            placeholder="Search for cases, articles, or legal topics..."
+            value={query}
+            onChange={handleSearchChange}
+            className="form-control"
+          />
+        </div>
+        
+        {loading && <div className="loading-indicator">Searching...</div>}
+        
+        <div className="search-results">
+          {results.map((result) => (
+            <div 
+              key={result.id} 
+              className="result-item"
+              onClick={() => loadCaseDetails(result.id)}
+            >
+              <h3>{result.title}</h3>
+              <div className="result-meta">
+                <span>{result.court || result.source}</span>
+                <span>{result.date}</span>
+              </div>
+              <p>{result.content.substring(0, 200)}...</p>
+            </div>
+          ))}
+          
+          {results.length > 0 && (
+            <div className="pagination">
+              <button 
+                disabled={page === 1} 
+                onClick={() => handlePageChange(page - 1)}
+              >
+                Previous
+              </button>
+              <span>Page {page} of {totalPages}</span>
+              <button 
+                disabled={page === totalPages} 
+                onClick={() => handlePageChange(page + 1)}
+              >
+                Next
+              </button>
+            </div>
+          )}
+          
+          {results.length === 0 && query && !loading && (
+            <div className="no-results">No results found for "{query}"</div>
+          )}
+        </div>
+      </div>
+      
+      {selectedCase && (
+        <div className="case-detail-section">
+          <h2>{selectedCase.title}</h2>
+          <div className="case-meta">
+            <div><strong>Court:</strong> {selectedCase.court}</div>
+            <div><strong>Date:</strong> {selectedCase.date}</div>
+            {selectedCase.judges && (
+              <div><strong>Judges:</strong> {selectedCase.judges}</div>
+            )}
+          </div>
+          
+          <div className="case-content">
+            <h3>Case Content</h3>
+            <div dangerouslySetInnerHTML={{ __html: selectedCase.content }} />
+          </div>
+          
+          {citationNetwork && (
+            <div className="citation-network">
+              <h3>Citation Network</h3>
+              
+              {citationNetwork.citedBy.length > 0 && (
+                <div className="cited-by">
+                  <h4>Cited By ({citationNetwork.citedBy.length})</h4>
+                  <ul>
+                    {citationNetwork.citedBy.map((citation) => (
+                      <li key={citation.source_id}>
+                        <a onClick={() => loadCaseDetails(citation.source_id)}>
+                          {citation.source_title}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              {citationNetwork.cites.length > 0 && (
+                <div className="cites">
+                  <h4>Cites ({citationNetwork.cites.length})</h4>
+                  <ul>
+                    {citationNetwork.cites.map((citation) => (
+                      <li key={citation.target_id}>
+                        <a onClick={() => loadCaseDetails(citation.target_id)}>
+                          {citation.target_title}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// CSS Styling (add to your stylesheet)
+/*
+.legal-research-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.search-input input {
+  width: 100%;
+  padding: 0.75rem;
+  font-size: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.search-results {
+  margin-top: 1rem;
+}
+
+.result-item {
+  padding: 1rem;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+
+.result-item:hover {
+  background-color: #f9f9f9;
+}
+
+.result-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.875rem;
+  color: #666;
+  margin: 0.5rem 0;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 1rem;
+  gap: 1rem;
+}
+
+.case-detail-section {
+  padding: 1rem;
+  border: 1px solid #eee;
+  border-radius: 4px;
+}
+
+.case-meta {
+  margin: 1rem 0;
+  padding: 1rem;
+  background-color: #f9f9f9;
+  border-radius: 4px;
+}
+
+.case-content {
+  margin-top: 1rem;
+  line-height: 1.6;
+}
+
+.citation-network {
+  margin-top: 2rem;
+}
+
+.cited-by, .cites {
+  margin-top: 1rem;
+}
+
+.cited-by a, .cites a {
+  cursor: pointer;
+  color: #0066cc;
+  text-decoration: underline;
+}
+*/
+
+export default LegalResearch;

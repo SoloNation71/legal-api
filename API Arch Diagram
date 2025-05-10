@@ -1,0 +1,40 @@
+flowchart TD
+    subgraph "Client Application"
+        UI[In My Square Legal App]
+    end
+    
+    subgraph "Your API Layer"
+        API[Legal Research API]
+        CACHE[Cache Layer]
+        RateLimiter[Rate Limiter]
+    end
+    
+    subgraph "Your Data Storage"
+        DB[(Supabase Database)]
+    end
+    
+    subgraph "External Data Sources"
+        CL[CourtListener API]
+        CAP[Caselaw Access Project API]
+        PUBMED[PubMed API]
+        WEB[Web Scraping]
+    end
+    
+    UI --> API
+    API --> CACHE
+    CACHE -- Cache Hit --> API
+    CACHE -- Cache Miss --> RateLimiter
+    
+    RateLimiter --> DB
+    RateLimiter --> CL
+    RateLimiter --> CAP
+    RateLimiter --> PUBMED
+    RateLimiter --> WEB
+    
+    DB --> API
+    CL --> API
+    CAP --> API
+    PUBMED --> API
+    WEB --> API
+    
+    API -- Store New Data --> DB
