@@ -20,9 +20,9 @@
     "express": "^5.1.0",
     "git": "^0.1.5",
     "lru-cache": "^11.1.0",
+    "react": "^19.1.0",
     "supabase": "^2.22.12"
   },
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SoloNation71/legal-api.git"
