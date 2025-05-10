@@ -9,8 +9,8 @@ const { parseRobotsTxt } = require('robots-parser');
 const { createClient } = require('@supabase/supabase-js');
 
 // Supabase configuration
-const supabaseUrl = process.env.SUPABASE_URL || 'https://cesifthkmduihsjiiwxj.supabase.co';
-const supabaseKey = process.env.SUPABASE_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || 'https://uhhxlimwdctancprdsst.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || 'your-seyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVoaHhsaW13ZGN0YW5jcHJkc3N0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY4MzYzMjMsImV4cCI6MjA2MjQxMjMyM30.qYc_jj2wrh3sXBiJ53pqn_hRtXG1Vq6y4zLTra4F_Ac';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Rate limiting configuration
